@@ -1,19 +1,28 @@
 #!/usr/bin/env bash
 # fix_sepolicy_mojito.sh
 #
-# Corrige l'erreur de compilation :
-#   error: implicit declaration of function 'flex_array_alloc'
-#   error: no member named 'total_nr_elements' in 'struct ebitmap'
-#   error: no member named 'type_val_to_struct_array' in 'struct policydb'
+# Corrige l'erreur de compilation SELinux/policydb rencontrée avec le
+# sepolicy.c fourni par la branche "legacy" de KernelSU-Next sur le
+# noyau Mojito (4.14, avec un policydb.h déjà "post-flex_array" mais
+# PAS encore au niveau de la réécriture struct selinux_policy des
+# noyaux 5.19+).
 #
-# Cause : drivers/kernelsu/selinux/sepolicy.c (fourni par la branche "legacy"
-# de KernelSU-Next) a été écrit pour l'ancienne API SELinux basée sur
-# struct flex_array (kernels ~2.6.37 -> ~5.0). Le noyau Mojito, bien
-# qu'étiqueté "4.14", a déjà le policydb.h post-2019 (tableaux kvmalloc
-# classiques, sans flex_array). D'où l'incompatibilité.
+# Historique des tentatives :
+#   1. sepolicy.c de KernelSU-Next legacy -> erreurs flex_array
+#      (API SELinux ~2.6.37-5.0, trop ancienne pour ce noyau)
+#   2. sepolicy.c upstream HEAD de tiann/KernelSU -> erreurs
+#      struct selinux_policy / filename_trans_key incomplete type
+#      (API SELinux ~5.19+, trop récente pour ce noyau)
 #
-# Solution : remplacer ce fichier par la version upstream actuelle de
-# tiann/KernelSU, qui utilise la même API que le policydb.h de Mojito.
+# Solution retenue : backslashxx/KernelSU est un fork de tiann/KernelSU
+# activement maintenu pour compiler sur une large plage de noyaux
+# (3.0 à 5.4+, testé notamment sur 4.14) grâce à du code conditionnel
+# par version (LINUX_VERSION_CODE) dans sepolicy.c. On ne remplace QUE
+# ce fichier : rules.c de la branche legacy d'origine compile déjà
+# sans problème sur ce noyau, et il est la cible du patch
+# susfs_hook_only_official-legacy.patch appliqué juste après cette
+# étape dans le workflow -- le remplacer casse le contexte de ce
+# patch (hunk appliqué avec un gros offset = fichier corrompu).
 #
 # Usage (dans le workflow, juste après avoir cloné KernelSU-Next et créé
 # le lien symbolique drivers/kernelsu) :
@@ -22,27 +31,30 @@
 set -euo pipefail
 
 KSU_DIR="${1:-KernelSU}"
-TARGET="$KSU_DIR/kernel/selinux/sepolicy.c"
-UPSTREAM_URL="https://raw.githubusercontent.com/tiann/KernelSU/main/kernel/selinux/sepolicy.c"
+SRC_BASE="https://raw.githubusercontent.com/backslashxx/KernelSU/master/kernel/selinux"
 
-if [ ! -f "$TARGET" ]; then
-  echo "Erreur : $TARGET introuvable. Vérifie le chemin passé en argument." >&2
-  exit 1
-fi
+for f in sepolicy.c; do
+  TARGET="$KSU_DIR/kernel/selinux/$f"
 
-echo "Sauvegarde de l'ancien sepolicy.c (flex_array) en .orig ..."
-cp "$TARGET" "$TARGET.orig"
+  if [ ! -f "$TARGET" ]; then
+    echo "Attention : $TARGET introuvable, on saute ce fichier." >&2
+    continue
+  fi
 
-echo "Téléchargement de la version upstream (compatible policydb sans flex_array) ..."
-curl -fsSL "$UPSTREAM_URL" -o "$TARGET.new"
+  echo "Sauvegarde de l'ancien $f en .orig ..."
+  cp "$TARGET" "$TARGET.orig"
 
-if ! grep -q "flex_array" "$TARGET.new"; then
-  echo "OK : la nouvelle version ne référence plus flex_array."
-else
-  echo "Attention : le fichier téléchargé contient encore 'flex_array', vérifie manuellement." >&2
-fi
+  echo "Téléchargement de $f depuis backslashxx/KernelSU (compat multi-versions) ..."
+  curl -fsSL "$SRC_BASE/$f" -o "$TARGET.new"
 
-mv "$TARGET.new" "$TARGET"
+  if [ ! -s "$TARGET.new" ]; then
+    echo "Erreur : téléchargement de $f vide ou échoué." >&2
+    rm -f "$TARGET.new"
+    continue
+  fi
 
-echo "Remplacement terminé : $TARGET"
-echo "Ancienne version conservée dans : $TARGET.orig (pour comparaison si besoin)"
+  mv "$TARGET.new" "$TARGET"
+  echo "Remplacement terminé : $TARGET"
+done
+
+echo "Anciennes versions conservées en .orig à côté de chaque fichier (pour comparaison si besoin)"
