@@ -1,4 +1,4 @@
-From c0e9536e7e4438f85a6151a7ff8f317e9a1a64bf Mon Sep 17 00:00:00 2001
+From 52e28f5141cab69e9114b1e73988feac80410e6a Mon Sep 17 00:00:00 2001
 From: midori01 <lv@lvlv.lv>
 Date: Mon, 14 Sep 2026 19:50:53 +0900
 Subject: [PATCH] de-inlined susfs
@@ -16,10 +16,10 @@ Signed-off-by: midori01 <lv@lvlv.lv>
  8 files changed, 340 insertions(+)
 
 diff --git a/kernel/Kconfig b/kernel/Kconfig
-index 45e09d1faf12..91de6c1aed46 100644
+index ed3165b9e9ad..bb50e63c497d 100644
 --- a/kernel/Kconfig
 +++ b/kernel/Kconfig
-@@ -130,4 +130,99 @@ config KSU_HEURISTIC_IN_TREE_BUILD
+@@ -131,4 +131,99 @@ config KSU_HEURISTIC_IN_TREE_BUILD
  	depends on KSU
  	default y
  
@@ -174,12 +174,12 @@ index 925798048a86..4d169f763619 100644
  
  install_ksu_fd:
 diff --git a/kernel/ksu.c b/kernel/ksu.c
-index a0acfc3a2953..db3e7669a5fd 100644
+index 8bf067d7ab22..5c5c0f3b96ab 100644
 --- a/kernel/ksu.c
 +++ b/kernel/ksu.c
-@@ -20,6 +20,10 @@
- 
- #include "kernel_includes.h"
+@@ -30,6 +30,10 @@
+ #include "avc.h"
+ #endif
  
 +#ifdef CONFIG_KSU_SUSFS
 +#include <linux/susfs.h>
@@ -188,7 +188,7 @@ index a0acfc3a2953..db3e7669a5fd 100644
  // uapi
  #include "include/uapi/app_profile.h"
  #include "include/uapi/feature.h"
-@@ -263,6 +267,10 @@ static int __init kernelsu_init(void)
+@@ -275,6 +279,10 @@ static int __init kernelsu_init(void)
  
  	ksu_throne_tracker_init();
  
@@ -200,7 +200,7 @@ index a0acfc3a2953..db3e7669a5fd 100644
  
  	ksu_file_wrapper_init();
 diff --git a/kernel/selinux/rules.c b/kernel/selinux/rules.c
-index b510ba2d85aa..862f1af7aaeb 100644
+index a9d4f672f58c..1991ef9bb8fe 100644
 --- a/kernel/selinux/rules.c
 +++ b/kernel/selinux/rules.c
 @@ -23,6 +23,9 @@ static void reset_avc_cache()
@@ -335,7 +335,7 @@ index cbeac553d20a..1b99c0744645 100644
 +#endif // #ifdef CONFIG_KSU_SUSFS
  #endif
 diff --git a/kernel/supercall/dispatch.c b/kernel/supercall/dispatch.c
-index 0352bb928c58..412420161def 100644
+index 6597c98d79df..8de917c01899 100644
 --- a/kernel/supercall/dispatch.c
 +++ b/kernel/supercall/dispatch.c
 @@ -1,3 +1,7 @@
@@ -346,7 +346,7 @@ index 0352bb928c58..412420161def 100644
  static int do_grant_root(void __user *arg)
  {
  	int ret;
-@@ -86,6 +90,9 @@ static int do_report_event(void __user *arg)
+@@ -90,6 +94,9 @@ static int do_report_event(void __user *arg)
  			boot_complete_lock = true;
  			pr_info("boot_complete triggered\n");
  			on_boot_completed();
