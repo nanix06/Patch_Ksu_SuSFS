@@ -3,7 +3,6 @@ From: backslashxx <118538522+backslashxx@users.noreply.github.com>
 Date: Tue, 18 Aug 2026 09:31:51 +0800
 Subject: [PATCH] KernelSU: scope minimized manual hooks 2.3 (fixed for 4.14)
 
-Apply with:  patch -p1 --fuzz=3 < kernelsu_hooks_mojito_414.patch
 
 ---
  fs/exec.c       |  5 +++++
