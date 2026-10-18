@@ -1,4 +1,17 @@
-
+# ===========================================================================
+# KernelSU (import 32693) - patch des fichiers du NOYAU modifies
+# Branche: ximi-mojito/android_kernel_xiaomi_mojito : personal
+# Base: 17.0 (merge-base 54f1c52e), commit KSU 7025f2d8
+#
+# Contenu :
+#   1) Backports requis par le KSU 32693 sur ce noyau 4.14
+#   2) Lignes d'activation dans drivers/Kconfig + drivers/Makefile
+#   3) Hooks manuels sucompat/reboot (patch_ksubxx.patch) recalibres sur
+#      le contexte EXACT de cette branche (do_faccessat post-backport).
+#      drivers/kernelsu/ lui-meme n'est PAS inclus (a importer separement).
+#   Sans SUSFS (absent de cette branche).
+#
+# Application:  patch -p1 < kernelsu-only.patch   (ou git apply)
 # ===========================================================================
 
 diff --git a/include/linux/audit.h b/include/linux/audit.h
@@ -617,11 +630,14 @@ index 4a067525bbdc..deec728a21a9 100644
 +obj-$(CONFIG_KSU) 		+= kernelsu/
 
 # ===========================================================================
-# HOOKS MANUELS (patch_ksubxx.patch adapte au contexte exact de la branche)
+# HOOKS MANUELS (patch_ksubxx.patch adapte au contexte EXACT de la branche)
 # Points d'entree sucompat/reboot interceptes dans le code noyau.
 # A appliquer APRES les backports ci-dessus (do_faccessat doit exister).
 # Signatures verifiees contre drivers/kernelsu/ du commit 7025f2d8.
+# Contexte ancre sur cp_new_stat / cp_new_stat64 (pas sur les signatures
+# SYSCALL_DEFINE, qui different selon les arbres).
 # ===========================================================================
+
 diff --git a/fs/exec.c b/fs/exec.c
 --- a/fs/exec.c
 +++ b/fs/exec.c
@@ -653,10 +669,7 @@ diff --git a/fs/open.c b/fs/open.c
 diff --git a/fs/stat.c b/fs/stat.c
 --- a/fs/stat.c
 +++ b/fs/stat.c
-@@ -368,8 +368,13 @@
- SYSCALL_DEFINE4(newfstatat, int, dfd, const char __user *, filename,
- 		struct stat __user *, statbuf, int, flag)
- {
+@@ -371,7 +371,12 @@
  	struct kstat stat;
  	int error;
  
@@ -667,6 +680,8 @@ diff --git a/fs/stat.c b/fs/stat.c
 +
  	error = vfs_fstatat(dfd, filename, &stat, flag);
  	if (error)
+ 		return error;
+ 	return cp_new_stat(&stat, statbuf);
 @@ -384,7 +389,15 @@
  	int error = vfs_fstat(fd, &stat);
  
@@ -699,10 +714,7 @@ diff --git a/fs/stat.c b/fs/stat.c
 +
  	return error;
  }
-@@ -512,8 +533,13 @@
- SYSCALL_DEFINE4(fstatat64, int, dfd, const char __user *, filename,
- 		struct stat64 __user *, statbuf, int, flag)
- {
+@@ -515,7 +536,12 @@
  	struct kstat stat;
  	int error;
  
@@ -713,6 +725,8 @@ diff --git a/fs/stat.c b/fs/stat.c
 +
  	error = vfs_fstatat(dfd, filename, &stat, flag);
  	if (error)
+ 		return error;
+ 	return cp_new_stat64(&stat, statbuf);
 diff --git a/kernel/reboot.c b/kernel/reboot.c
 --- a/kernel/reboot.c
 +++ b/kernel/reboot.c
