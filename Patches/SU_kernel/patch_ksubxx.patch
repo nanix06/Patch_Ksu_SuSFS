@@ -1,17 +1,4 @@
-# ===========================================================================
-# KernelSU (import 32693) - patch des fichiers du NOYAU modifies
-# Branche: ximi-mojito/android_kernel_xiaomi_mojito : personal
-# Base: 17.0 (merge-base 54f1c52e), commit KSU 7025f2d8
-#
-# Contenu :
-#   1) Backports requis par le KSU 32693 sur ce noyau 4.14
-#   2) Lignes d'activation dans drivers/Kconfig + drivers/Makefile
-#   3) Hooks manuels sucompat/reboot (patch_ksubxx.patch) recalibres sur
-#      le contexte EXACT de cette branche (do_faccessat post-backport).
-#      drivers/kernelsu/ lui-meme n'est PAS inclus (a importer separement).
-#   Sans SUSFS (absent de cette branche).
-#
-# Application:  patch -p1 < kernelsu-only.patch   (ou git apply)
+
 # ===========================================================================
 
 diff --git a/include/linux/audit.h b/include/linux/audit.h
