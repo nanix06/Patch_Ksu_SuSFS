@@ -1,115 +1,616 @@
-From 2081311e4d56e80c8ea5d344b56b2b10bf9d752d Mon Sep 17 00:00:00 2001
-From: backslashxx <118538522+backslashxx@users.noreply.github.com>
-Date: Tue, 18 Aug 2026 09:31:51 +0800
-Subject: [PATCH] KernelSU: scope minimized manual hooks 2.3 (fixed for 4.14)
 
-
----
- fs/exec.c       |  5 +++++
- fs/open.c       |  5 +++++
- fs/stat.c       | 26 ++++++++++++++++++++++++++
- kernel/reboot.c |  5 +++++
- 4 files changed, 41 insertions(+)
-
-diff --git a/fs/exec.c b/fs/exec.c
---- a/fs/exec.c
-+++ b/fs/exec.c
-@@ -1725,6 +1725,11 @@ static int do_execveat_common(int fd, struct filename *filename,
- 	struct files_struct *displaced;
- 	int retval;
- 
-+#ifdef CONFIG_KSU
-+	extern int ksu_handle_execveat(int *, struct filename **, void *, void *, int *);
-+	ksu_handle_execveat(&fd, &filename, &argv, &envp, &flags);
-+#endif
+# ===========================================================================
+diff --git a/include/linux/audit.h b/include/linux/audit.h
+index 850aef61b264..0b2b1cb4563d 100644
+--- a/include/linux/audit.h
++++ b/include/linux/audit.h
+@@ -216,6 +216,12 @@ static inline void audit_log_task_info(struct audit_buffer *ab,
+ 				       struct task_struct *tsk)
+ { }
+ #define audit_enabled AUDIT_OFF
 +
- 	if (IS_ERR(filename))
- 		return PTR_ERR(filename);
++static inline int audit_update_lsm_rules(void)
++{
++	return 0;
++}
++
+ #endif /* CONFIG_AUDIT */
  
+ #ifdef CONFIG_AUDIT_COMPAT_GENERIC
+diff --git a/include/linux/lsm_audit.h b/include/linux/lsm_audit.h
+index 915330abf6e5..7ae9dcf89578 100644
+--- a/include/linux/lsm_audit.h
++++ b/include/linux/lsm_audit.h
+@@ -117,8 +117,16 @@ int ipv4_skb_to_auditdata(struct sk_buff *skb,
+ int ipv6_skb_to_auditdata(struct sk_buff *skb,
+ 		struct common_audit_data *ad, u8 *proto);
+ 
++#ifdef CONFIG_AUDIT
+ void common_lsm_audit(struct common_audit_data *a,
+ 	void (*pre_audit)(struct audit_buffer *, void *),
+ 	void (*post_audit)(struct audit_buffer *, void *));
++#else
++static inline void common_lsm_audit(struct common_audit_data *a,
++	void (*pre_audit)(struct audit_buffer *, void *),
++	void (*post_audit)(struct audit_buffer *, void *))
++{
++}
++#endif
+ 
+ #endif
+diff --git a/security/selinux/Kconfig b/security/selinux/Kconfig
+index 349cda7a4448..e1b7fdec8c3a 100644
+--- a/security/selinux/Kconfig
++++ b/security/selinux/Kconfig
+@@ -1,6 +1,6 @@
+ config SECURITY_SELINUX
+ 	bool "NSA SELinux Support"
+-	depends on SECURITY_NETWORK && AUDIT && NET && INET
++	depends on SECURITY_NETWORK && NET && INET
+ 	select NETWORK_SECMARK
+ 	default n
+ 	help
 diff --git a/fs/open.c b/fs/open.c
+index 004c8ddb891e..82f183d4dab8 100644
 --- a/fs/open.c
 +++ b/fs/open.c
-@@ -360,6 +360,11 @@ SYSCALL_DEFINE3(faccessat, int, dfd, const char __user *, filename, int, mode)
+@@ -365,7 +365,6 @@ SYSCALL_DEFINE3(faccessat, int, dfd, const char __user *, filename, int, mode)
+ 	struct cred *override_cred;
+ 	struct path path;
+ 	struct inode *inode;
+-	struct vfsmount *mnt;
  	int res;
  	unsigned int lookup_flags = LOOKUP_FOLLOW;
  
-+#ifdef CONFIG_KSU
-+	extern int ksu_handle_faccessat(int *, const char __user **, int *, int *);
-+	ksu_handle_faccessat(&dfd, &filename, &mode, NULL);
-+#endif
+@@ -415,7 +414,7 @@ SYSCALL_DEFINE3(faccessat, int, dfd, const char __user *, filename, int, mode)
+ 		goto out;
+ 
+ 	inode = d_backing_inode(path.dentry);
+-	mnt = path.mnt;
++	struct vfsmount *mnt = path.mnt;
+ 
+ 	if ((mode & MAY_EXEC) && S_ISREG(inode->i_mode)) {
+ 		/*
+diff --git a/fs/internal.h b/fs/internal.h
+index e42c583095cd..1a20c5882d29 100644
+--- a/fs/internal.h
++++ b/fs/internal.h
+@@ -113,6 +113,7 @@ extern struct file *do_file_open_root(struct dentry *, struct vfsmount *,
+ 		const char *, const struct open_flags *);
+ 
+ long do_sys_ftruncate(unsigned int fd, loff_t length, int small);
++long do_faccessat(int dfd, const char __user *filename, int mode);
+ 
+ extern int open_check_o_direct(struct file *f);
+ extern int vfs_open(const struct path *, struct file *);
+diff --git a/fs/open.c b/fs/open.c
+index 82f183d4dab8..e951044a2de2 100644
+--- a/fs/open.c
++++ b/fs/open.c
+@@ -359,7 +359,7 @@ SYSCALL_DEFINE4(fallocate, int, fd, int, mode, loff_t, offset, loff_t, len)
+  * We do this by temporarily clearing all FS-related capabilities and
+  * switching the fsuid/fsgid around to the real ones.
+  */
+-SYSCALL_DEFINE3(faccessat, int, dfd, const char __user *, filename, int, mode)
++long do_faccessat(int dfd, const char __user *filename, int mode)
+ {
+ 	const struct cred *old_cred;
+ 	struct cred *override_cred;
+@@ -455,9 +455,14 @@ SYSCALL_DEFINE3(faccessat, int, dfd, const char __user *, filename, int, mode)
+ 	return res;
+ }
+ 
++SYSCALL_DEFINE3(faccessat, int, dfd, const char __user *, filename, int, mode)
++{
++	return do_faccessat(dfd, filename, mode);
++}
 +
+ SYSCALL_DEFINE2(access, const char __user *, filename, int, mode)
+ {
+-	return sys_faccessat(AT_FDCWD, filename, mode);
++	return do_faccessat(AT_FDCWD, filename, mode);
+ }
+ 
+ SYSCALL_DEFINE1(chdir, const char __user *, filename)
+diff --git a/include/linux/syscalls.h b/include/linux/syscalls.h
+index c3a8ac60d884..e8410036f565 100644
+--- a/include/linux/syscalls.h
++++ b/include/linux/syscalls.h
+@@ -962,4 +962,10 @@ static inline long ksys_ftruncate(unsigned int fd, unsigned long length)
+ 	return do_sys_ftruncate(fd, length, 1);
+ }
+ 
++extern long do_faccessat(int dfd, const char __user *filename, int mode);
++static inline long ksys_access(const char __user *filename, int mode)
++{
++	return do_faccessat(AT_FDCWD, filename, mode);
++}
++
+ #endif
+diff --git a/init/main.c b/init/main.c
+index 1bf0786661bc..aacd65454b8d 100644
+--- a/init/main.c
++++ b/init/main.c
+@@ -1175,7 +1175,8 @@ static noinline void __init kernel_init_freeable(void)
+ 	if (!ramdisk_execute_command)
+ 		ramdisk_execute_command = "/init";
+ 
+-	if (sys_access((const char __user *) ramdisk_execute_command, 0) != 0) {
++	if (ksys_access((const char __user *)
++			ramdisk_execute_command, 0) != 0) {
+ 		ramdisk_execute_command = NULL;
+ 		prepare_namespace();
+ 	}
+diff --git a/fs/open.c b/fs/open.c
+index e951044a2de2..598aa4b251a3 100644
+--- a/fs/open.c
++++ b/fs/open.c
+@@ -359,21 +359,14 @@ SYSCALL_DEFINE4(fallocate, int, fd, int, mode, loff_t, offset, loff_t, len)
+  * We do this by temporarily clearing all FS-related capabilities and
+  * switching the fsuid/fsgid around to the real ones.
+  */
+-long do_faccessat(int dfd, const char __user *filename, int mode)
++static const struct cred *access_override_creds(void)
+ {
+ 	const struct cred *old_cred;
+ 	struct cred *override_cred;
+-	struct path path;
+-	struct inode *inode;
+-	int res;
+-	unsigned int lookup_flags = LOOKUP_FOLLOW;
+-
+-	if (mode & ~S_IRWXO)	/* where's F_OK, X_OK, W_OK, R_OK? */
+-		return -EINVAL;
+ 
+ 	override_cred = prepare_creds();
+ 	if (!override_cred)
+-		return -ENOMEM;
++		return NULL;
+ 
+ 	override_cred->fsuid = override_cred->uid;
+ 	override_cred->fsgid = override_cred->gid;
+@@ -408,6 +401,28 @@ long do_faccessat(int dfd, const char __user *filename, int mode)
+ 	override_cred->non_rcu = 1;
+ 
+ 	old_cred = override_creds(override_cred);
++
++	/* override_cred() gets its own ref */
++	put_cred(override_cred);
++
++	return old_cred;
++}
++
++long do_faccessat(int dfd, const char __user *filename, int mode)
++{
++	struct path path;
++	struct inode *inode;
++	int res;
++	unsigned int lookup_flags = LOOKUP_FOLLOW;
++	const struct cred *old_cred;
++
++	if (mode & ~S_IRWXO)	/* where's F_OK, X_OK, W_OK, R_OK? */
++		return -EINVAL;
++
++	old_cred = access_override_creds();
++	if (!old_cred)
++		return -ENOMEM;
++
+ retry:
+ 	res = user_path_at(dfd, filename, lookup_flags, &path);
+ 	if (res)
+@@ -451,7 +466,6 @@ long do_faccessat(int dfd, const char __user *filename, int mode)
+ 	}
+ out:
+ 	revert_creds(old_cred);
+-	put_cred(override_cred);
+ 	return res;
+ }
+ 
+diff --git a/arch/arm/tools/syscall.tbl b/arch/arm/tools/syscall.tbl
+index 74fa3a508261..03c36d61ec6c 100644
+--- a/arch/arm/tools/syscall.tbl
++++ b/arch/arm/tools/syscall.tbl
+@@ -416,4 +416,5 @@
+ 434	common	pidfd_open		sys_pidfd_open
+ 435	common	clone3			sys_clone3
+ 436	common	close_range		sys_close_range
++439	common	faccessat2			sys_faccessat2
+ 441	common	epoll_pwait2		sys_epoll_pwait2
+diff --git a/arch/arm64/include/asm/unistd32.h b/arch/arm64/include/asm/unistd32.h
+index 03bdd6210800..edc10ea68fa7 100644
+--- a/arch/arm64/include/asm/unistd32.h
++++ b/arch/arm64/include/asm/unistd32.h
+@@ -825,6 +825,8 @@ __SYSCALL(__NR_pidfd_open, sys_pidfd_open)
+ __SYSCALL(__NR_clone3, sys_clone3)
+ #define __NR_close_range 436
+ __SYSCALL(__NR_close_range, sys_close_range)
++#define __NR_faccessat2 439
++__SYSCALL(__NR_faccessat2, sys_faccessat2)
+ #define __NR_epoll_pwait2 441
+ __SYSCALL(__NR_epoll_pwait2, compat_sys_epoll_pwait2)
+ 
+diff --git a/arch/x86/entry/syscalls/syscall_32.tbl b/arch/x86/entry/syscalls/syscall_32.tbl
+index c7a9827c8588..6ce20223e152 100644
+--- a/arch/x86/entry/syscalls/syscall_32.tbl
++++ b/arch/x86/entry/syscalls/syscall_32.tbl
+@@ -395,4 +395,5 @@
+ 434	i386	pidfd_open		sys_pidfd_open
+ 435	i386	clone3			sys_clone3			__ia32_sys_clone3
+ 436	i386	close_range		sys_close_range
++439	i386	faccessat2		sys_faccessat2
+ 441	i386	epoll_pwait2		sys_epoll_pwait2		compat_sys_epoll_pwait2
+diff --git a/arch/x86/entry/syscalls/syscall_64.tbl b/arch/x86/entry/syscalls/syscall_64.tbl
+index 66eda2510842..659f24c65c5c 100644
+--- a/arch/x86/entry/syscalls/syscall_64.tbl
++++ b/arch/x86/entry/syscalls/syscall_64.tbl
+@@ -343,6 +343,7 @@
+ 434	common	pidfd_open		sys_pidfd_open
+ 435	common	clone3			sys_clone3/ptregs
+ 436	common	close_range		sys_close_range
++439	common	faccessat2		sys_faccessat2
+ 441	common	epoll_pwait2		sys_epoll_pwait2
+ 
+ #
+diff --git a/fs/internal.h b/fs/internal.h
+index 1a20c5882d29..e42c583095cd 100644
+--- a/fs/internal.h
++++ b/fs/internal.h
+@@ -113,7 +113,6 @@ extern struct file *do_file_open_root(struct dentry *, struct vfsmount *,
+ 		const char *, const struct open_flags *);
+ 
+ long do_sys_ftruncate(unsigned int fd, loff_t length, int small);
+-long do_faccessat(int dfd, const char __user *filename, int mode);
+ 
+ extern int open_check_o_direct(struct file *f);
+ extern int vfs_open(const struct path *, struct file *);
+diff --git a/fs/open.c b/fs/open.c
+index 598aa4b251a3..4833dbd6b42d 100644
+--- a/fs/open.c
++++ b/fs/open.c
+@@ -408,20 +408,30 @@ static const struct cred *access_override_creds(void)
+ 	return old_cred;
+ }
+ 
+-long do_faccessat(int dfd, const char __user *filename, int mode)
++long do_faccessat(int dfd, const char __user *filename, int mode, int flags)
+ {
+ 	struct path path;
+ 	struct inode *inode;
+ 	int res;
+ 	unsigned int lookup_flags = LOOKUP_FOLLOW;
+-	const struct cred *old_cred;
++	const struct cred *old_cred = NULL;
+ 
  	if (mode & ~S_IRWXO)	/* where's F_OK, X_OK, W_OK, R_OK? */
  		return -EINVAL;
  
-diff --git a/fs/stat.c b/fs/stat.c
---- a/fs/stat.c
-+++ b/fs/stat.c
-@@ -371,6 +371,11 @@ SYSCALL_DEFINE4(newfstatat, int, dfd, const char __user *, filename,
- 	struct kstat stat;
- 	int error;
- 
-+#ifdef CONFIG_KSU
-+	extern int ksu_handle_stat(int *, const char __user **, int *);
-+	ksu_handle_stat(&dfd, &filename, &flag);
-+#endif
+-	old_cred = access_override_creds();
+-	if (!old_cred)
+-		return -ENOMEM;
++	if (flags & ~(AT_EACCESS | AT_SYMLINK_NOFOLLOW | AT_EMPTY_PATH))
++		return -EINVAL;
 +
- 	error = vfs_fstatat(dfd, filename, &stat, flag);
- 	if (error)
- 		return error;
-@@ -386,6 +391,14 @@ SYSCALL_DEFINE2(newfstat, unsigned int, fd, struct stat __user *, statbuf)
- 	if (!error)
- 		error = cp_new_stat(&stat, statbuf);
- 
-+#if defined(CONFIG_KSU) && !defined(CONFIG_KSU_KPROBES_KSUD)
-+#pragma GCC diagnostic push
-+#pragma GCC diagnostic ignored "-Wdeclaration-after-statement"
-+	extern void ksu_handle_newfstat_ret(unsigned int *, struct stat __user **);
-+	ksu_handle_newfstat_ret(&fd, &statbuf);
-+#pragma GCC diagnostic pop
-+#endif
++	if (flags & AT_SYMLINK_NOFOLLOW)
++		lookup_flags &= ~LOOKUP_FOLLOW;
++	if (flags & AT_EMPTY_PATH)
++		lookup_flags |= LOOKUP_EMPTY;
 +
- 	return error;
++	if (!(flags & AT_EACCESS)) {
++		old_cred = access_override_creds();
++		if (!old_cred)
++			return -ENOMEM;
++	}
+ 
+ retry:
+ 	res = user_path_at(dfd, filename, lookup_flags, &path);
+@@ -465,18 +475,26 @@ long do_faccessat(int dfd, const char __user *filename, int mode)
+ 		goto retry;
+ 	}
+ out:
+-	revert_creds(old_cred);
++	if (old_cred)
++		revert_creds(old_cred);
++
+ 	return res;
  }
  
-@@ -506,6 +519,14 @@ SYSCALL_DEFINE2(fstat64, unsigned long, fd, struct stat64 __user *, statbuf)
- 	if (!error)
- 		error = cp_new_stat64(&stat, statbuf);
- 
-+#if defined(CONFIG_KSU) && !defined(CONFIG_KSU_KPROBES_KSUD) // for 32-bit
-+#pragma GCC diagnostic push
-+#pragma GCC diagnostic ignored "-Wdeclaration-after-statement"
-+	extern void ksu_handle_fstat64_ret(unsigned long *, struct stat64 __user **);
-+	ksu_handle_fstat64_ret(&fd, &statbuf);
-+#pragma GCC diagnostic pop
-+#endif
+ SYSCALL_DEFINE3(faccessat, int, dfd, const char __user *, filename, int, mode)
+ {
+-	return do_faccessat(dfd, filename, mode);
++	return do_faccessat(dfd, filename, mode, 0);
++}
 +
- 	return error;
++SYSCALL_DEFINE4(faccessat2, int, dfd, const char __user *, filename, int, mode,
++		int, flags)
++{
++	return do_faccessat(dfd, filename, mode, flags);
  }
  
-@@ -515,6 +536,11 @@ SYSCALL_DEFINE4(fstatat64, int, dfd, const char __user *, filename,
- 	struct kstat stat;
- 	int error;
+ SYSCALL_DEFINE2(access, const char __user *, filename, int, mode)
+ {
+-	return do_faccessat(AT_FDCWD, filename, mode);
++	return do_faccessat(AT_FDCWD, filename, mode, 0);
+ }
  
-+#ifdef CONFIG_KSU
-+	extern int ksu_handle_stat(int *, const char __user **, int *);
-+	ksu_handle_stat(&dfd, &filename, &flag);
-+#endif
-+
- 	error = vfs_fstatat(dfd, filename, &stat, flag);
- 	if (error)
- 		return error;
-diff --git a/kernel/reboot.c b/kernel/reboot.c
---- a/kernel/reboot.c
-+++ b/kernel/reboot.c
-@@ -284,6 +284,11 @@ SYSCALL_DEFINE4(reboot, int, magic1, int, magic2, unsigned int, cmd,
- 	char buffer[256];
- 	int ret = 0;
+ SYSCALL_DEFINE1(chdir, const char __user *, filename)
+diff --git a/include/linux/syscalls.h b/include/linux/syscalls.h
+index e8410036f565..cdf054613f87 100644
+--- a/include/linux/syscalls.h
++++ b/include/linux/syscalls.h
+@@ -817,6 +817,8 @@ asmlinkage long sys_renameat2(int olddfd, const char __user *oldname,
+ asmlinkage long sys_futimesat(int dfd, const char __user *filename,
+ 			      struct timeval __user *utimes);
+ asmlinkage long sys_faccessat(int dfd, const char __user *filename, int mode);
++asmlinkage long sys_faccessat2(int dfd, const char __user *filename, int mode,
++			       int flags);
+ asmlinkage long sys_fchmodat(int dfd, const char __user * filename,
+ 			     umode_t mode);
+ asmlinkage long sys_fchownat(int dfd, const char __user *filename, uid_t user,
+@@ -962,10 +964,10 @@ static inline long ksys_ftruncate(unsigned int fd, unsigned long length)
+ 	return do_sys_ftruncate(fd, length, 1);
+ }
  
-+#if defined(CONFIG_KSU) && !defined(CONFIG_KSU_KPROBES_KSUD)
-+	extern int ksu_handle_sys_reboot(int, int, unsigned int, void __user **);
-+	ksu_handle_sys_reboot(magic1, magic2, cmd, &arg);
-+#endif
-+
- 	/* We only trust the superuser with rebooting the system. */
- 	if (!ns_capable(pid_ns->user_ns, CAP_SYS_BOOT))
+-extern long do_faccessat(int dfd, const char __user *filename, int mode);
++long do_faccessat(int dfd, const char __user *filename, int mode, int flags);
+ static inline long ksys_access(const char __user *filename, int mode)
+ {
+-	return do_faccessat(AT_FDCWD, filename, mode);
++	return do_faccessat(AT_FDCWD, filename, mode, 0);
+ }
+ 
+ #endif
+diff --git a/include/uapi/asm-generic/unistd.h b/include/uapi/asm-generic/unistd.h
+index ca68a66295c3..9c62e9edcf8b 100644
+--- a/include/uapi/asm-generic/unistd.h
++++ b/include/uapi/asm-generic/unistd.h
+@@ -740,6 +740,8 @@ __SYSCALL(__NR_pidfd_open, sys_pidfd_open)
+ __SYSCALL(__NR_clone3, sys_clone3)
+ #define __NR_close_range 436
+ __SYSCALL(__NR_close_range, sys_close_range)
++#define __NR_faccessat2 439
++__SYSCALL(__NR_faccessat2, sys_faccessat2)
+ #define __NR_epoll_pwait2 441
+ __SC_COMP(__NR_epoll_pwait2, sys_epoll_pwait2, compat_sys_epoll_pwait2)
+ 
+diff --git a/include/uapi/linux/fcntl.h b/include/uapi/linux/fcntl.h
+index 586bf89f6b87..26c61eb0ca8e 100644
+--- a/include/uapi/linux/fcntl.h
++++ b/include/uapi/linux/fcntl.h
+@@ -76,10 +76,20 @@
+ #define DN_ATTRIB	0x00000020	/* File changed attibutes */
+ #define DN_MULTISHOT	0x80000000	/* Don't remove notifier */
+ 
++/*
++ * The constants AT_REMOVEDIR and AT_EACCESS have the same value.  AT_EACCESS is
++ * meaningful only to faccessat, while AT_REMOVEDIR is meaningful only to
++ * unlinkat.  The two functions do completely different things and therefore,
++ * the flags can be allowed to overlap.  For example, passing AT_REMOVEDIR to
++ * faccessat would be undefined behavior and thus treating it equivalent to
++ * AT_EACCESS is valid undefined behavior.
++ */
+ #define AT_FDCWD		-100    /* Special value used to indicate
+                                            openat should use the current
+                                            working directory. */
+ #define AT_SYMLINK_NOFOLLOW	0x100   /* Do not follow symbolic links.  */
++#define AT_EACCESS		0x200	/* Test access permitted for
++                                           effective IDs, not real IDs.  */
+ #define AT_REMOVEDIR		0x200   /* Remove directory instead of
+                                            unlinking file.  */
+ #define AT_SYMLINK_FOLLOW	0x400   /* Follow symbolic links.  */
+diff --git a/fs/internal.h b/fs/internal.h
+index e42c583095cd..b18e011c983e 100644
+--- a/fs/internal.h
++++ b/fs/internal.h
+@@ -75,6 +75,7 @@ extern int mnt_want_write_file_path(struct file *);
+ extern void __mnt_drop_write(struct vfsmount *);
+ extern void __mnt_drop_write_file(struct file *);
+ extern void mnt_drop_write_file_path(struct file *);
++int path_umount(struct path *path, int flags);
+ 
+ /*
+  * fs_struct.c
+diff --git a/fs/namespace.c b/fs/namespace.c
+index 6ca275c923c1..8015d54586bf 100644
+--- a/fs/namespace.c
++++ b/fs/namespace.c
+@@ -1739,37 +1739,19 @@ static inline bool may_mandlock(void)
+ }
+ #endif
+ 
+-/*
+- * Now umount can handle mount points as well as block devices.
+- * This is important for filesystems which use unnamed block devices.
+- *
+- * We now support a flag for forced unmount like the other 'big iron'
+- * unixes. Our API is identical to OSF/1 to avoid making a mess of AMD
+- */
+-
+-SYSCALL_DEFINE2(umount, char __user *, name, int, flags)
++// caller is responsible for flags being sane
++int path_umount(struct path *path, int flags)
+ {
+-	struct path path;
+ 	struct mount *mnt;
+ 	int retval;
+-	int lookup_flags = 0;
+ 	bool user_request = !(current->flags & PF_KTHREAD);
+ 
+-	if (flags & ~(MNT_FORCE | MNT_DETACH | MNT_EXPIRE | UMOUNT_NOFOLLOW))
+-		return -EINVAL;
+-
+ 	if (!may_mount())
  		return -EPERM;
+ 
+-	if (!(flags & UMOUNT_NOFOLLOW))
+-		lookup_flags |= LOOKUP_FOLLOW;
+-
+-	retval = user_path_mountpoint_at(AT_FDCWD, name, lookup_flags, &path);
+-	if (retval)
+-		goto out;
+-	mnt = real_mount(path.mnt);
++	mnt = real_mount(path->mnt);
+ 	retval = -EINVAL;
+-	if (path.dentry != path.mnt->mnt_root)
++	if (path->dentry != path->mnt->mnt_root)
+ 		goto dput_and_out;
+ 	if (!check_mnt(mnt))
+ 		goto dput_and_out;
+@@ -1786,7 +1768,7 @@ SYSCALL_DEFINE2(umount, char __user *, name, int, flags)
+ 	retval = do_umount(mnt, flags);
+ dput_and_out:
+ 	/* we mustn't call path_put() as that would clear mnt_expiry_mark */
+-	dput(path.dentry);
++	dput(path->dentry);
+ 	if (user_request && (!retval || (flags & MNT_FORCE))) {
+ 		/* filesystem needs to handle unclosed namespaces */
+ 		if (mnt->mnt.mnt_sb->s_op->umount_end)
+@@ -1813,6 +1795,33 @@ SYSCALL_DEFINE2(umount, char __user *, name, int, flags)
+ 	return retval;
+ }
+ 
++/*
++ * Now umount can handle mount points as well as block devices.
++ * This is important for filesystems which use unnamed block devices.
++ *
++ * We now support a flag for forced unmount like the other 'big iron'
++ * unixes. Our API is identical to OSF/1 to avoid making a mess of AMD
++ */
++
++SYSCALL_DEFINE2(umount, char __user *, name, int, flags)
++{
++	struct path path;
++	int lookup_flags = 0;
++	int retval;
++
++	if (flags & ~(MNT_FORCE | MNT_DETACH | MNT_EXPIRE | UMOUNT_NOFOLLOW))
++		return -EINVAL;
++
++	if (!(flags & UMOUNT_NOFOLLOW))
++		lookup_flags |= LOOKUP_FOLLOW;
++
++	retval = user_path_mountpoint_at(AT_FDCWD, name, lookup_flags, &path);
++	if (retval)
++		return retval;
++	
++	return path_umount(&path, flags);
++}
++
+ #ifdef __ARCH_WANT_SYS_OLDUMOUNT
+ 
+ /*
+diff --git a/fs/proc/array.c b/fs/proc/array.c
+index 37c7ed0dc820..ecd977096213 100644
+--- a/fs/proc/array.c
++++ b/fs/proc/array.c
+@@ -347,6 +347,8 @@ static inline void task_seccomp(struct seq_file *m, struct task_struct *p)
+ 	seq_put_decimal_ull(m, "NoNewPrivs:\t", task_no_new_privs(p));
+ #ifdef CONFIG_SECCOMP
+ 	seq_put_decimal_ull(m, "\nSeccomp:\t", p->seccomp.mode);
++	seq_put_decimal_ull(m, "\nSeccomp_filters:\t",
++			    atomic_read(&p->seccomp.filter_count));
+ #endif
+ 	seq_printf(m, "\nSpeculation_Store_Bypass:\t");
+ 	switch (arch_prctl_spec_ctrl_get(p, PR_SPEC_STORE_BYPASS)) {
+diff --git a/include/linux/seccomp.h b/include/linux/seccomp.h
+index a9d5c52de4ea..4adb3b100d70 100644
+--- a/include/linux/seccomp.h
++++ b/include/linux/seccomp.h
+@@ -11,6 +11,7 @@
+ #ifdef CONFIG_SECCOMP
+ 
+ #include <linux/thread_info.h>
++#include <linux/atomic.h>
+ #include <asm/seccomp.h>
+ 
+ struct seccomp_filter;
+@@ -27,6 +28,7 @@ struct seccomp_filter;
+  */
+ struct seccomp {
+ 	int mode;
++	atomic_t filter_count;
+ 	struct seccomp_filter *filter;
+ };
+ 
+diff --git a/init/init_task.c b/init/init_task.c
+index f9c6df545b5c..9cc5489a2117 100644
+--- a/init/init_task.c
++++ b/init/init_task.c
+@@ -131,6 +131,9 @@ struct task_struct init_task
+ 	INIT_KASAN(init_task)
+ 	INIT_LIVEPATCH(init_task)
+ 	INIT_TASK_SECURITY
++#ifdef CONFIG_SECCOMP
++	.seccomp	= { .filter_count = ATOMIC_INIT(0) },
++#endif
+ };
+ 
+ EXPORT_SYMBOL(init_task);
+diff --git a/kernel/seccomp.c b/kernel/seccomp.c
+index 03e8228e58e6..7cde3072288f 100644
+--- a/kernel/seccomp.c
++++ b/kernel/seccomp.c
+@@ -342,6 +342,8 @@ static inline void seccomp_sync_threads(unsigned long flags)
+ 		put_seccomp_filter(thread);
+ 		smp_store_release(&thread->seccomp.filter,
+ 				  caller->seccomp.filter);
++		atomic_set(&thread->seccomp.filter_count,
++			   atomic_read(&thread->seccomp.filter_count));
+ 
+ 		/*
+ 		 * Don't let an unprivileged task work around
+@@ -480,6 +482,7 @@ static long seccomp_attach_filter(unsigned int flags,
+ 	 */
+ 	filter->prev = current->seccomp.filter;
+ 	current->seccomp.filter = filter;
++	atomic_inc(&current->seccomp.filter_count);
+ 
+ 	/* Now that the new filter is in place, synchronize to all threads. */
+ 	if (flags & SECCOMP_FILTER_FLAG_TSYNC)
+diff --git a/security/selinux/ss/policydb.c b/security/selinux/ss/policydb.c
+index c52dddd27abc..85b42aea9dd8 100644
+--- a/security/selinux/ss/policydb.c
++++ b/security/selinux/ss/policydb.c
+@@ -3419,6 +3419,10 @@ int policydb_write(struct policydb *p, void *fp)
+ 	if (p->mls_enabled)
+ 		config |= POLICYDB_CONFIG_MLS;
+ 
++	if (p->android_netlink_route)
++		config |= POLICYDB_CONFIG_ANDROID_NETLINK_ROUTE;
++	if (p->android_netlink_getneigh)
++		config |= POLICYDB_CONFIG_ANDROID_NETLINK_GETNEIGH;
+ 	if (p->reject_unknown)
+ 		config |= REJECT_UNKNOWN;
+ 	if (p->allow_unknown)
+diff --git a/init/Kconfig b/init/Kconfig
+index 9ec4d1c2ce89..95552d28b3b5 100644
+--- a/init/Kconfig
++++ b/init/Kconfig
+@@ -1531,7 +1531,7 @@ config KALLSYMS
+ 
+ config KALLSYMS_ALL
+ 	bool "Include all symbols in kallsyms"
+-	depends on DEBUG_KERNEL && KALLSYMS
++	depends on KALLSYMS
+ 	help
+ 	   Normally kallsyms only contains the symbols of functions for nicer
+ 	   OOPS messages and backtraces (i.e., symbols from the text and inittext
+diff --git a/drivers/Kconfig b/drivers/Kconfig
+index 4de50cdb8031..1bd9311078fa 100644
+--- a/drivers/Kconfig
++++ b/drivers/Kconfig
+@@ -235,4 +235,6 @@ config TARGET_PROJECT_K7_CAMERA
+         bool "Target Projet K7 CAMERA"
+         default n
+ 
++
++source "drivers/kernelsu/Kconfig"
+ endmenu
+diff --git a/drivers/Makefile b/drivers/Makefile
+index 4a067525bbdc..deec728a21a9 100644
+--- a/drivers/Makefile
++++ b/drivers/Makefile
+@@ -191,3 +191,4 @@ obj-$(CONFIG_ESOC)              += esoc/
+ # GNSS driver
+ obj-$(CONFIG_GNSS_SIRF)		+= gnsssirf/
+ obj-$(CONFIG_GNSS)		+= gnss/
++obj-$(CONFIG_KSU) 		+= kernelsu/
