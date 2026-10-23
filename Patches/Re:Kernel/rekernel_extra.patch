@@ -688,53 +688,47 @@ new file mode 100644
 diff --git a/drivers/android/binder.c b/drivers/android/binder.c
 --- a/drivers/android/binder.c
 +++ b/drivers/android/binder.c
-@@ -72,6 +72,10 @@
+@@ -71,6 +71,11 @@
+ #include <linux/pid_namespace.h>
  #include <linux/security.h>
  #include <linux/spinlock.h>
- 
++
 +#ifdef CONFIG_REKERNEL
 +#include <net/rekernel.h>
 +#endif /* CONFIG_REKERNEL */
 +
+ 
  #include <uapi/linux/android/binder.h>
  #include <uapi/linux/sched/types.h>
- #include "binder_alloc.h"
-@@ -3242,7 +3246,15 @@
- 		}
- 		target_proc = target_thread->proc;
- 		atomic_inc(&target_proc->tmp_ref);
- 		binder_inner_proc_unlock(target_thread->proc);
+@@ -3405,6 +3405,23 @@
+ 			     (u64)tr->data.ptr.offsets,
+ 			     (u64)tr->data_size, (u64)tr->offsets_size,
+ 			     (u64)extra_buffers_size);
++
 +#ifdef CONFIG_REKERNEL
-+		if (proc->tsk && target_proc->tsk &&
-+		    proc->pid != target_proc->pid &&
-+		    task_uid(target_proc->tsk).val <= MAX_SYSTEM_UID)
++	if (proc->tsk && target_proc->tsk &&
++	    proc->pid != target_proc->pid) {
++		if (reply && task_uid(target_proc->tsk).val <= MAX_SYSTEM_UID)
 +			rekernel_report(BINDER, REPLY, proc->pid, proc->tsk,
 +					target_proc->pid, target_proc->tsk,
 +					false, "", tr->code);
-+#endif /* CONFIG_REKERNEL */
- 	} else {
- 		if (tr->target.handle) {
- 			struct binder_ref *ref;
-@@ -3295,6 +3307,15 @@
- 			goto err_dead_binder;
- 		}
- 		e->to_node = target_node->debug_id;
-+#ifdef CONFIG_REKERNEL
-+		if (proc->tsk && target_proc->tsk &&
-+		    proc->pid != target_proc->pid &&
-+		    task_uid(target_proc->tsk).val > MIN_USERAPP_UID)
++		else if (!reply &&
++			 task_uid(target_proc->tsk).val > MIN_USERAPP_UID)
 +			rekernel_report(BINDER, TRANSACTION, proc->pid,
 +					proc->tsk, target_proc->pid,
 +					target_proc->tsk,
 +					tr->flags & TF_ONE_WAY, "", tr->code);
++	}
 +#endif /* CONFIG_REKERNEL */
- 		if (security_binder_transaction(proc->cred,
- 						target_proc->cred) < 0) {
- 			return_error = BR_FAILED_REPLY;
++
+ 
+ 	if (!reply && !(tr->flags & TF_ONE_WAY))
+ 		t->from = thread;
 diff --git a/drivers/android/binder_alloc.c b/drivers/android/binder_alloc.c
 --- a/drivers/android/binder_alloc.c
 +++ b/drivers/android/binder_alloc.c
-@@ -30,5 +30,10 @@
+@@ -29,7 +29,12 @@
+ #include <linux/sched.h>
  #include <linux/list_lru.h>
  #include <linux/uaccess.h>
  #include <linux/highmem.h>
@@ -745,16 +739,16 @@ diff --git a/drivers/android/binder_alloc.c b/drivers/android/binder_alloc.c
 +#endif /* CONFIG_REKERNEL */
  #include "binder_alloc.h"
  #include "binder_trace.h"
-@@ -433,9 +438,29 @@
- 		return ERR_PTR(-EINVAL);
- 	}
+ 
+@@ -435,6 +435,29 @@
  
  	/* Pad 0-size buffers so they get assigned unique addresses */
  	size = max(size, sizeof(void *));
- 
++
 +#ifdef CONFIG_REKERNEL
 +	if (is_async &&
-+	    alloc->free_async_space < 3 * (size + sizeof(struct binder_buffer))) {
++	    alloc->free_async_space <
++			3 * (size + sizeof(struct binder_buffer))) {
 +		struct task_struct *proc_task;
 +
 +		rcu_read_lock();
@@ -764,21 +758,22 @@ diff --git a/drivers/android/binder_alloc.c b/drivers/android/binder_alloc.c
 +		rcu_read_unlock();
 +
 +		if (proc_task) {
-+			rekernel_report(BINDER, OVERFLOW, task_tgid_nr(current),
-+					current, task_tgid_nr(proc_task),
-+					proc_task, true, "", 0);
++			rekernel_report(BINDER, OVERFLOW,
++					task_tgid_nr(current), current,
++					task_tgid_nr(proc_task), proc_task,
++					true, "", 0);
 +			put_task_struct(proc_task);
 +		}
 +	}
 +#endif /* CONFIG_REKERNEL */
 +
+ 
  	if (is_async && alloc->free_async_space < size) {
  		binder_alloc_debug(BINDER_DEBUG_BUFFER_ALLOC,
- 			     "%d: binder_alloc_buf size %zd failed, no async space left\n",
 diff --git a/kernel/signal.c b/kernel/signal.c
 --- a/kernel/signal.c
 +++ b/kernel/signal.c
-@@ -54,4 +54,7 @@
+@@ -54,6 +54,9 @@
  #include <asm/unistd.h>
  #include <asm/siginfo.h>
  #include <asm/cacheflush.h>
@@ -786,19 +781,19 @@ diff --git a/kernel/signal.c b/kernel/signal.c
 +#include <net/rekernel.h>
 +#endif /* CONFIG_REKERNEL */
  #include "audit.h"	/* audit_signal_info() */
-@@ -1217,10 +1220,15 @@
- int do_send_sig_info(int sig, struct siginfo *info, struct task_struct *p,
- 			bool group)
- {
+ 
+ /*
+@@ -1220,6 +1220,13 @@
  	unsigned long flags;
  	int ret = -ESRCH;
  
 +#ifdef CONFIG_REKERNEL
-+	if (sig == SIGKILL || sig == SIGTERM || sig == SIGABRT || sig == SIGQUIT)
++	if (sig == SIGKILL || sig == SIGTERM ||
++	    sig == SIGABRT || sig == SIGQUIT)
 +		rekernel_report(SIGNAL, sig, task_tgid_nr(current), current,
 +				task_tgid_nr(p), p, false, "", 0);
 +#endif /* CONFIG_REKERNEL */
++
  	if (lock_task_sighand(p, &flags)) {
  		ret = send_signal(sig, info, p, group);
  		unlock_task_sighand(p, &flags);
- 	}
