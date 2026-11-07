@@ -40,8 +40,12 @@ apply_cgroup() {
 		log "cgroup: spatch absent, repli sur le diff"
 	fi
 
-	patch -p1 --forward --fuzz=3 --no-backup-if-mismatch \
-		< "$DS_DIR/02.fix_restore_cgroup_file_prefix_handling.patch" >/dev/null 2>&1 || true
+	# git apply d'abord : GNU patch rejette parfois un hunk dont le contexte
+	# correspond pourtant exactement a l'arbre. GNU patch en dernier recours.
+	if ! git apply "$DS_DIR/02.fix_restore_cgroup_file_prefix_handling.patch" >/dev/null 2>&1; then
+		patch -p1 --forward --fuzz=3 --no-backup-if-mismatch \
+			< "$DS_DIR/02.fix_restore_cgroup_file_prefix_handling.patch" >/dev/null 2>&1 || true
+	fi
 	grep -qF "$CGROUP_MARK" "$CGROUP_C"
 }
 
@@ -71,8 +75,10 @@ else
 
 	if grep -qF "$QTA_MARK" "$QTA"; then
 		log "xt_qtaguid: repli sur le diff"
-		patch -p1 --forward --fuzz=3 --no-backup-if-mismatch \
-			< "$DS_DIR/01.fix_kernel_panic_in_xt_qtaguid.patch" >/dev/null 2>&1 || true
+		if ! git apply "$DS_DIR/01.fix_kernel_panic_in_xt_qtaguid.patch" >/dev/null 2>&1; then
+			patch -p1 --forward --fuzz=3 --no-backup-if-mismatch \
+				< "$DS_DIR/01.fix_kernel_panic_in_xt_qtaguid.patch" >/dev/null 2>&1 || true
+		fi
 	fi
 
 	grep -qF "$QTA_MARK" "$QTA" \
