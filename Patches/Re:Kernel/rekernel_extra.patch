@@ -688,16 +688,16 @@ new file mode 100644
 diff --git a/drivers/android/binder.c b/drivers/android/binder.c
 --- a/drivers/android/binder.c
 +++ b/drivers/android/binder.c
-@@ -71,6 +71,11 @@
+@@ -71,7 +71,11 @@
  #include <linux/pid_namespace.h>
  #include <linux/security.h>
  #include <linux/spinlock.h>
-+
+ #include <linux/ratelimit.h>
+ 
 +#ifdef CONFIG_REKERNEL
 +#include <net/rekernel.h>
 +#endif /* CONFIG_REKERNEL */
 +
- 
  #include <uapi/linux/android/binder.h>
  #include <uapi/linux/sched/types.h>
 @@ -3405,6 +3405,23 @@
